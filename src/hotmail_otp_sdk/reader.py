@@ -105,18 +105,49 @@ class OtpReader:
         self._provider_name = "GRAPH"
         return GraphMailboxProvider(self._graph_token, self.options)
 
-    def _read_messages(self, top: int, folders: Iterable[str]) -> tuple[list[MailResult], str]:
+    @property
+    def current_refresh_token(self) -> str:
+        """The refresh token in use, including one rotated by Microsoft.
+
+        Persist this value (securely) after reading if the caller stores
+        credentials; Microsoft may replace the original refresh token.
+        """
+        return self.token_manager.current_refresh_token
+
+    def _read_from_provider(
+        self,
+        provider: MailboxProvider,
+        top: int,
+        folders: Iterable[str],
+        deadline: float | None,
+    ) -> list[MailResult]:
+        results: list[MailResult] = []
+        for folder in folders:
+            results.extend(provider.get_latest_messages(top, folder, deadline=deadline))
+        return results
+
+    def _read_messages(
+        self,
+        top: int,
+        folders: Iterable[str],
+        deadline: float | None = None,
+    ) -> tuple[list[MailResult], str]:
         if self._closed:
             raise MailboxProviderError("OtpReader is closed.")
 
         if self._provider is None:
             self._provider = self._create_provider()
 
+        folders = tuple(folders)
         try:
-            results: list[MailResult] = []
-            for folder in folders:
-                results.extend(self._provider.get_latest_messages(top, folder))
-            return results, self._provider_name
+            return (
+                self._read_from_provider(self._provider, top, folders, deadline),
+                self._provider_name,
+            )
+        except Throttled:
+            # Throttling is transient and Graph is healthy: let the caller
+            # honor Retry-After instead of abandoning Graph for IMAP.
+            raise
         except MailboxProviderError:
             if (
                 self._provider_name == "GRAPH"
@@ -126,11 +157,19 @@ class OtpReader:
                 self._provider.close()
                 self._provider = self._new_imap_provider()
                 self._provider_name = "IMAP"
-                results = []
-                for folder in folders:
-                    results.extend(self._provider.get_latest_messages(top, folder))
-                return results, self._provider_name
+                return (
+                    self._read_from_provider(self._provider, top, folders, deadline),
+                    self._provider_name,
+                )
             raise
+
+    def _timeout(self) -> OtpResult:
+        return OtpResult(
+            status="TIMEOUT",
+            email=self.account.email,
+            provider=self._provider_name,
+            error="Timeout",
+        )
 
     def wait_for_otp(self, query: OtpQuery, options: OtpOptions | None = None) -> OtpResult:
         opts = options or OtpOptions()
@@ -149,7 +188,7 @@ class OtpReader:
                     status="ERROR",
                     email=self.account.email,
                     provider=self._provider_name,
-                    error="OtpNotFound",
+                    error="InvalidOtpPattern",
                 )
 
         effective_query = query
@@ -168,6 +207,7 @@ class OtpReader:
                 raw_messages, provider_name = self._read_messages(
                     opts.max_messages_to_check,
                     _folders(effective_query),
+                    deadline,
                 )
                 messages = filter_messages(raw_messages, effective_query)
                 ranked = _rank_candidates(messages, effective_query.otp_pattern)
@@ -199,14 +239,10 @@ class OtpReader:
                     retry_delay = exc.retry_after
                     if retry_delay is not None:
                         remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            return OtpResult(
-                                status="TIMEOUT",
-                                email=self.account.email,
-                                provider=self._provider_name,
-                                error="Timeout",
-                            )
-                        time.sleep(min(retry_delay, remaining))
+                        # Waiting out Retry-After would pass the deadline.
+                        if remaining <= 0 or retry_delay >= remaining:
+                            return self._timeout()
+                        time.sleep(retry_delay)
                         continue
                 else:
                     return OtpResult(
@@ -216,14 +252,11 @@ class OtpReader:
                         error=exc.code,
                     )
 
-            if time.monotonic() >= deadline:
-                return OtpResult(
-                    status="TIMEOUT",
-                    email=self.account.email,
-                    provider=self._provider_name,
-                    error="Timeout",
-                )
-            time.sleep(max(0.0, opts.poll_interval_ms / 1000))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return self._timeout()
+            # Never sleep past the overall deadline.
+            time.sleep(min(max(0.0, opts.poll_interval_ms / 1000), remaining))
 
     def get_latest_messages(self, top: int = 10, folder: str = "Inbox") -> list[MailResult]:
         if top < 1:
@@ -236,7 +269,12 @@ class OtpReader:
             self._provider.close()
             self._provider = None
         self.token_manager.close()
-        object.__setattr__(self.account, "password", "")
-        object.__setattr__(self.account, "refresh_token", "")
-        object.__setattr__(self.account, "client_id", "")
+        # Drop this reader's reference to the secrets without mutating the
+        # caller's (frozen) HotmailAccount, which may still be in use.
+        self.account = HotmailAccount(
+            email=self.account.email,
+            password="",
+            refresh_token="",
+            client_id="",
+        )
         self._closed = True

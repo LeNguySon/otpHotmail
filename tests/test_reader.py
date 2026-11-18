@@ -50,7 +50,7 @@ def test_wait_for_otp_rejects_invalid_custom_regex():
         OtpOptions(timeout_ms=100, poll_interval_ms=10),
     )
     assert result.status == "ERROR"
-    assert result.error == "OtpNotFound"
+    assert result.error == "InvalidOtpPattern"
     reader.close()
 
 

@@ -86,12 +86,25 @@ python -m compileall -q src tests
 
 ## Result behavior
 
-- `SUCCESS`: exactly one OTP candidate was found.
-- `AMBIGUOUS`: multiple candidates remained equally likely.
-- `TIMEOUT`: no matching OTP arrived before the overall timeout.
-- `ERROR`: invalid options/regex or a provider/token failure.
+- `SUCCESS`: one OTP candidate ranked clearly highest. When a code was
+  resent, the code from the newest message wins.
+- `AMBIGUOUS`: multiple candidates remained equally likely (`candidates` lists
+  them).
+- `TIMEOUT`: no matching OTP arrived before the overall timeout, or a
+  throttling `Retry-After` would pass the timeout.
+- `ERROR`: a provider or token failure (`error` holds the exception code, such
+  as `MailboxProviderError` or `TokenRefreshFailed`), an invalid regex
+  (`InvalidOtpPattern`), or invalid options.
 - `GRAPH` or `IMAP`: identifies the provider that returned the result.
 
 Graph provider failures can fall back to IMAP when `fallback_to_imap=True`.
-Close the reader when finished so cached access and refresh tokens are cleared
-from memory.
+Throttling (HTTP 429) does not trigger the fallback; the reader waits for
+`Retry-After` within the timeout instead. Network waits, retries and polling are
+bounded by `timeout_ms`; a single network operation may still take up to one
+second past it.
+
+Microsoft may rotate the refresh token. Read `reader.current_refresh_token`
+before `close()` and store it securely if you persist credentials.
+
+Close the reader when finished so cached access and refresh tokens are dropped.
+`close()` does not modify a `HotmailAccount` you passed in.

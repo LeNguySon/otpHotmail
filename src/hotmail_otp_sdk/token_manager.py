@@ -18,10 +18,19 @@ class TokenManager:
         self._tokens: dict[str, tuple[str, float]] = {}
         self._refresh_token = account.refresh_token
         self._lock = threading.Lock()
+        self._closed = False
+
+    @property
+    def current_refresh_token(self) -> str:
+        """Latest refresh token, including one rotated by the token endpoint."""
+        with self._lock:
+            return self._refresh_token
 
     def get_access_token(self, scope: str | None = None) -> str:
         scope = scope or self._options.oauth_scope
         with self._lock:
+            if self._closed:
+                raise TokenRefreshFailed("TokenManager is closed.")
             cached = self._tokens.get(scope)
             if cached and time.monotonic() < cached[1]:
                 return cached[0]
@@ -79,3 +88,4 @@ class TokenManager:
         with self._lock:
             self._tokens.clear()
             self._refresh_token = ""
+            self._closed = True

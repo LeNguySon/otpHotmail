@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from unittest.mock import call, patch
+from unittest.mock import ANY, call, patch
 
 import pytest
 
@@ -78,14 +78,14 @@ def test_throttle_with_retry_after_waits_then_succeeds(reader):
     sleep.assert_called_once_with(4.0)
 
 
-def test_throttle_retry_after_is_capped_by_remaining_time(reader):
+def test_throttle_retry_after_beyond_deadline_times_out_without_waiting(reader):
     with (
         patch(GRAPH_READ, side_effect=[Throttled(retry_after=600.0), [_otp_mail()]]),
         patch(SLEEP) as sleep,
     ):
-        reader.wait_for_otp(OtpQuery(), OtpOptions(timeout_ms=5_000))
-    (delay,), _ = sleep.call_args
-    assert 0 < delay <= 5.0
+        result = reader.wait_for_otp(OtpQuery(), OtpOptions(timeout_ms=5_000))
+    assert result.status == "TIMEOUT"
+    sleep.assert_not_called()
 
 
 def test_throttle_after_deadline_returns_timeout(reader):
@@ -158,7 +158,8 @@ def test_invalid_options_return_error_without_network(reader, options):
 def test_query_folder_selects_mailboxes(reader, folder, expected):
     with patch(GRAPH_READ, return_value=[]) as read:
         reader.wait_for_otp(OtpQuery(folder=folder), OtpOptions(timeout_ms=0, max_messages_to_check=7))
-    assert read.call_args_list == [call(7, name) for name in expected]
+    assert read.call_args_list == [call(7, name, deadline=ANY) for name in expected]
+    assert all(c.kwargs["deadline"] is not None for c in read.call_args_list)
 
 
 def test_default_since_ignores_old_messages(reader):
@@ -226,7 +227,7 @@ def test_imap_provider_option_skips_graph():
         with patch(GRAPH_READ) as graph_read, patch(IMAP_READ, return_value=[]) as imap_read:
             assert reader.get_latest_messages(3, "Junk") == []
         graph_read.assert_not_called()
-        imap_read.assert_called_once_with(3, "Junk")
+        imap_read.assert_called_once_with(3, "Junk", deadline=None)
     finally:
         reader._token_patcher.stop()
         reader.close()

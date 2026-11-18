@@ -8,9 +8,33 @@ from .models import MailResult, OtpQuery
 
 DEFAULT_OTP_PATTERN = re.compile(r"\b\d{4,8}\b")
 AUTH_CONTEXT = re.compile(
-    r"\b(verification code|otp|passcode|one[- ]time password|security code|mã xác nhận)\b",
+    r"\b(verification code|otp|passcode|one[- ]time password|security code|login code"
+    r"|mã xác nhận|mã xác minh|mã xác thực)\b",
     re.IGNORECASE,
 )
+# Bare "code" is common in OTP mails ("Your code is ...") but also appears in
+# "postal code" or "promo code", so it earns a smaller boost and is ignored
+# after such qualifiers. Spans already matched by AUTH_CONTEXT are not counted
+# twice.
+GENERIC_CONTEXT = re.compile(r"\b(code|mã)\b", re.IGNORECASE)
+NON_OTP_CODE_QUALIFIER = re.compile(
+    r"\b(postal|zip|post|promo|promotion|discount|coupon|voucher|area|country"
+    r"|product|tracking|order|bưu chính|giảm giá|khuyến mãi|đơn hàng)\s*$",
+    re.IGNORECASE,
+)
+# Distances are gaps in characters between the keyword and the candidate.
+_ADJACENT_GAP = 5
+_STRONG_GAP = 20
+_NEAR_GAP = 50
+_EARLIEST_YEAR = 1900
+
+
+def _gap(span: tuple[int, int], other: tuple[int, int]) -> int:
+    if other[0] >= span[1]:
+        return other[0] - span[1]
+    if other[1] <= span[0]:
+        return span[0] - other[1]
+    return 0
 
 
 # Content of these elements is never shown to the reader; it holds CSS/JS such
@@ -77,20 +101,47 @@ def extract_otp_candidates_with_scores(
 ) -> tuple[tuple[str, int], ...]:
     regex = re.compile(pattern) if pattern else DEFAULT_OTP_PATTERN
     text = f"{message.subject}\n{message.body_text}"
+    strong = [m.span() for m in AUTH_CONTEXT.finditer(text)]
+    generic = [
+        m.span()
+        for m in GENERIC_CONTEXT.finditer(text)
+        if not any(start <= m.start() < end for start, end in strong)
+        and not NON_OTP_CODE_QUALIFIER.search(text[: m.start()])
+    ]
+    latest_year = message.received_at.year + 1
     candidates: dict[str, int] = {}
     for match in regex.finditer(text):
         candidate = match.group(0)
+        span = match.span()
         if candidate.isdigit():
-            if candidate in {"2025", "2026"} or len(candidate) == 10:
+            if len(candidate) == 10:  # phone-number length
+                continue
+            # A year-like number (e.g. "(c) 2026", dates) is only accepted
+            # when verification wording sits immediately next to it, as in
+            # "verification code: 2019".
+            looks_like_year = (
+                len(candidate) == 4 and _EARLIEST_YEAR <= int(candidate) <= latest_year
+            )
+            if looks_like_year and not any(
+                _gap(keyword, span) <= _ADJACENT_GAP for keyword in strong
+            ):
                 continue
 
         score = 1
-        for auth_match in AUTH_CONTEXT.finditer(text):
-            distance = abs(auth_match.start() - match.start())
-            if distance <= 20:
+        for keyword in strong:
+            gap = _gap(keyword, span)
+            if gap <= _ADJACENT_GAP:
+                score += 10
+            elif gap <= _STRONG_GAP:
                 score += 8
-            elif distance <= 50:
+            elif gap <= _NEAR_GAP:
                 score += 5
+        for keyword in generic:
+            gap = _gap(keyword, span)
+            if gap <= _STRONG_GAP:
+                score += 3
+            elif gap <= _NEAR_GAP:
+                score += 1
         candidates[candidate] = candidates.get(candidate, 0) + score
 
     return tuple(

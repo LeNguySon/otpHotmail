@@ -343,6 +343,7 @@ sequenceDiagram
 | `Timeout` | Đã hết thời gian chờ (`timeoutMs`) mà không có thư hoặc OTP mới phù hợp. | Tăng thời gian timeout hoặc yêu cầu hệ thống đích gửi lại mã. |
 | `AmbiguousOtp` | Tìm thấy nhiều mã OTP trong thư nhưng không phân giải được mã chính xác. | Siết chặt bộ lọc người gửi, tiêu đề hoặc cung cấp regex đặc thù. |
 | `OtpNotFound` | Đọc được email mới nhưng không trích xuất được chuỗi số phù hợp quy tắc OTP. | Kiểm tra lại mẫu email hoặc định dạng OTP của dịch vụ gửi. |
+| `InvalidOtpPattern` | Biểu thức chính quy `otpPattern` do người dùng cung cấp không hợp lệ. | Sửa lại cú pháp regex trong `OtpQuery`. |
 
 ---
 
