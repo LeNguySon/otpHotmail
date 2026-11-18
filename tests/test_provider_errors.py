@@ -178,6 +178,10 @@ class FakeImap:
         self.selected = mailbox
         return self.select_status, [str(len(self.messages)).encode()]
 
+    def uid(self, command, *args):
+        # Mirror imaplib: UID SEARCH/FETCH dispatch to search()/fetch().
+        return getattr(self, command.lower())(*args)
+
     def search(self, *_args):
         return "OK", [b" ".join(self.messages)]
 

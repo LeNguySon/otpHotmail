@@ -1,6 +1,6 @@
 import pytest
 
-from hotmail_otp_sdk import HotmailAccount, InvalidCredentialFormat, OtpReader
+from hotmail_otp_sdk import InvalidCredentialFormat, OtpReader
 
 
 def test_parse_valid_account_masks_sensitive_values():

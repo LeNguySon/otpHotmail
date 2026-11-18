@@ -187,6 +187,10 @@ def test_imap_fallback_requests_imap_scoped_token():
         def select(self, *_args, **_kwargs):
             return "OK", [b"0"]
 
+        def uid(self, command, *args):
+            # Mirror imaplib: UID SEARCH/FETCH dispatch to search()/fetch().
+            return getattr(self, command.lower())(*args)
+
         def search(self, *_args):
             return "OK", [b""]
 

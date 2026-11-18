@@ -1,7 +1,5 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
-from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -12,15 +10,18 @@ class HotmailAccount:
     client_id: str
 
     def __repr__(self) -> str:
-        return f"HotmailAccount(email={self.email!r}, password='***', refresh_token='***', client_id={self.client_id!r})"
+        return (
+            f"HotmailAccount(email={self.email!r}, password='***', "
+            f"refresh_token='***', client_id={self.client_id!r})"
+        )
 
 
 @dataclass(frozen=True)
 class OtpQuery:
-    since: Optional[datetime] = None
+    since: datetime | None = None
     sender_allowlist: tuple[str, ...] = ()
-    subject_contains: Optional[str] = None
-    otp_pattern: Optional[str] = None
+    subject_contains: str | None = None
+    otp_pattern: str | None = None
     folder: str = "Inbox"
 
 
@@ -56,19 +57,19 @@ class MailResult:
     sender: str
     subject: str
     body_text: str
-    body_html: Optional[str] = None
+    body_html: str | None = None
 
 
 @dataclass(frozen=True)
 class OtpResult:
     status: str
     email: str
-    code: Optional[str] = None
-    message_id: Optional[str] = None
-    received_at: Optional[datetime] = None
-    sender: Optional[str] = None
-    subject: Optional[str] = None
-    body_snippet: Optional[str] = None
+    code: str | None = None
+    message_id: str | None = None
+    received_at: datetime | None = None
+    sender: str | None = None
+    subject: str | None = None
+    body_snippet: str | None = None
     provider: str = "GRAPH"
-    error: Optional[str] = None
+    error: str | None = None
     candidates: tuple[str, ...] = ()

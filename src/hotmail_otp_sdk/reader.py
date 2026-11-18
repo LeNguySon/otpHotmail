@@ -16,8 +16,8 @@ from .providers import GraphMailboxProvider, ImapMailboxProvider, MailboxProvide
 from .token_manager import TokenManager
 
 
-def _folders(query: OtpQuery) -> tuple[str, ...]:
-    folder = query.folder.strip().lower()
+def _folders(folder_name: str) -> tuple[str, ...]:
+    folder = folder_name.strip().lower()
     if folder in ("both", "all", "inbox,junk", "inbox+junk"):
         return ("Inbox", "Junk")
     if folder in ("junk", "spam", "junkemail"):
@@ -86,6 +86,12 @@ class OtpReader:
     @staticmethod
     def from_format(account_line: str, options: ConfigOptions | None = None) -> "OtpReader":
         return OtpReader(parse_account(account_line), options)
+
+    def __enter__(self) -> "OtpReader":
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
 
     def _graph_token(self) -> str:
         return self.token_manager.get_access_token(self.options.oauth_scope)
@@ -206,7 +212,7 @@ class OtpReader:
             try:
                 raw_messages, provider_name = self._read_messages(
                     opts.max_messages_to_check,
-                    _folders(effective_query),
+                    _folders(effective_query.folder),
                     deadline,
                 )
                 messages = filter_messages(raw_messages, effective_query)
@@ -261,7 +267,9 @@ class OtpReader:
     def get_latest_messages(self, top: int = 10, folder: str = "Inbox") -> list[MailResult]:
         if top < 1:
             raise ValueError("top must be at least 1.")
-        messages, _ = self._read_messages((top), (folder,))
+        messages, _ = self._read_messages(top, _folders(folder))
+        # Folders are read separately; merge them newest first before trimming.
+        messages.sort(key=lambda message: _timestamp(message.received_at), reverse=True)
         return messages[:top]
 
     def close(self) -> None:

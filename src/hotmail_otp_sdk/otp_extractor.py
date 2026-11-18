@@ -1,10 +1,9 @@
 import html
 import re
+from collections.abc import Iterable
 from html.parser import HTMLParser
-from typing import Iterable
 
 from .models import MailResult, OtpQuery
-
 
 DEFAULT_OTP_PATTERN = re.compile(r"\b\d{4,8}\b")
 AUTH_CONTEXT = re.compile(
@@ -65,10 +64,13 @@ def normalize_html(value: str) -> str:
     parser = _TextExtractor()
     try:
         parser.feed(value)
-    except Exception:
-        return re.sub(r"<[^>]+>", " ", value)
+    except Exception:  # noqa: BLE001 - malformed markup must not break OTP reading
+        stripped = re.sub(r"<[^>]+>", " ", value)
+        return re.sub(r"\s+", " ", html.unescape(stripped)).strip()
     text = " ".join(parser.parts)
-    return html.unescape(re.sub(r"\s+", " ", text)).strip()
+    # HTMLParser (convert_charrefs=True) has already decoded entities;
+    # unescaping again would turn a literal "&amp;lt;" into "<".
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def normalize_sender(value: str) -> str:
@@ -166,8 +168,7 @@ def filter_messages(messages: Iterable[MailResult], query: OtpQuery) -> list[Mai
                 continue
         if not matches_allowlist(message.sender, query.sender_allowlist):
             continue
-        if query.subject_contains:
-            if query.subject_contains.lower() not in message.subject.lower():
-                continue
+        if query.subject_contains and query.subject_contains.lower() not in message.subject.lower():
+            continue
         filtered.append(message)
     return filtered

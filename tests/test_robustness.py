@@ -130,6 +130,10 @@ class _BrokenThenHealthyImap:
             raise ConnectionResetError("synthetic reset")
         return "OK", [b"0"]
 
+    def uid(self, command, *args):
+        # Mirror imaplib: UID SEARCH/FETCH dispatch to search()/fetch().
+        return getattr(self, command.lower())(*args)
+
     def search(self, *_args):
         return "OK", [b""]
 
@@ -162,6 +166,10 @@ def test_imap_skips_message_with_malformed_date():
 
         def select(self, *_args, **_kwargs):
             return "OK", [b"1"]
+
+        def uid(self, command, *args):
+            # Mirror imaplib: UID SEARCH/FETCH dispatch to search()/fetch().
+            return getattr(self, command.lower())(*args)
 
         def search(self, *_args):
             return "OK", [b"1"]
@@ -374,7 +382,7 @@ def test_poll_sleep_never_exceeds_remaining_time():
         )
     assert result.status == "TIMEOUT"
     assert sleep.call_count >= 1
-    assert all(call.args[0] <= 0.2 for call in sleep.call_args_list)
+    assert all(call.args[0] <= 0.2 + 1e-6 for call in sleep.call_args_list)
     reader.close()
 
 

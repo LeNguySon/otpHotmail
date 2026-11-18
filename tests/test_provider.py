@@ -186,6 +186,10 @@ def test_imap_provider_authenticates_fetches_and_closes():
             assert readonly is True
             return "OK", [b"1"]
 
+        def uid(self, command, *args):
+            # Mirror imaplib: UID SEARCH/FETCH dispatch to search()/fetch().
+            return getattr(self, command.lower())(*args)
+
         def search(self, *_args):
             return "OK", [b"1"]
 
@@ -318,6 +322,10 @@ def test_imap_provider_returns_raw_xoauth2_string_to_imaplib():
 
         def select(self, *_args, **_kwargs):
             return "OK", [b"0"]
+
+        def uid(self, command, *args):
+            # Mirror imaplib: UID SEARCH/FETCH dispatch to search()/fetch().
+            return getattr(self, command.lower())(*args)
 
         def search(self, *_args):
             return "OK", [b""]

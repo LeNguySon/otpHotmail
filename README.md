@@ -6,7 +6,8 @@ Hotmail, and Outlook accounts.
 ## Install
 
 ```powershell
-python -m pip install -e ".[test]"
+python -m pip install -e ".[test]"   # runtime + pytest
+python -m pip install -e ".[dev]"    # adds pytest-cov, ruff and mypy
 ```
 
 ## Usage
@@ -23,12 +24,10 @@ from hotmail_otp_sdk import (
     OtpReader,
 )
 
-reader = OtpReader.from_format(
+with OtpReader.from_format(
     "user@example.com|password|refresh-token|client-id",
     ConfigOptions(provider="GRAPH", fallback_to_imap=True),
-)
-
-try:
+) as reader:
     result = reader.wait_for_otp(
         OtpQuery(
             since=datetime.now(timezone.utc) - timedelta(minutes=5),
@@ -44,17 +43,33 @@ try:
         ),
     )
     print(result.status, result.code)
-finally:
-    reader.close()
 ```
+
+`OtpReader` is a context manager; leaving the `with` block calls `close()`.
+Calling `close()` explicitly is equivalent.
 
 To read recent messages without polling:
 
 ```python
-messages = reader.get_latest_messages(top=10, folder="Inbox")
+messages = reader.get_latest_messages(top=10, folder="both")  # Inbox + Junk, newest first
 for message in messages:
     print(message.received_at, message.sender, message.subject)
 ```
+
+To load several accounts (one `email|password|refresh_token|client_id` per
+line; blank lines and `#` comments are ignored):
+
+```python
+from hotmail_otp_sdk import OtpReader, load_accounts, parse_accounts
+
+accounts = load_accounts("accounts.txt")          # or parse_accounts(list_of_lines)
+for account in accounts:
+    with OtpReader(account) as reader:
+        ...
+```
+
+A malformed line raises `InvalidCredentialFormat` with its line number; the
+line content is never included in the error.
 
 Use synthetic credentials in tests. Never write real passwords, refresh tokens,
 access tokens, OTP values, or mailbox content into source, logs, fixtures, or
@@ -66,7 +81,9 @@ telemetry.
 
 - `token_endpoint`: Microsoft OAuth2 token endpoint
 - `graph_base_url`: Microsoft Graph base URL
-- `imap_host` and `imap_port`: IMAP XOAUTH2 fallback server
+- `imap_host` and `imap_port`: IMAP XOAUTH2 fallback server. IMAP messages
+  are identified by UID and dated by the server's `INTERNALDATE` (the sender's
+  `Date` header is only used when `INTERNALDATE` is unavailable)
 - `provider`: `GRAPH` or `IMAP`
 - `fallback_to_imap`: allow Graph failures to fall back to IMAP
 - `oauth_scope`: OAuth scope requested for Microsoft Graph tokens
@@ -81,8 +98,12 @@ telemetry.
 
 ```powershell
 python -m pytest
-python -m compileall -q src tests
+python -m ruff check
+python -m mypy
 ```
+
+CI (`.github/workflows/ci.yml`) runs the same checks on Ubuntu and Windows for
+Python 3.10–3.13.
 
 ## Result behavior
 

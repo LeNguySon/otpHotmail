@@ -234,7 +234,10 @@ def test_imap_provider_option_skips_graph():
 
 
 def test_get_latest_messages_trims_to_top(reader):
-    mails = [_otp_mail(message_id=str(i)) for i in range(5)]
+    base = datetime.now(timezone.utc)
+    mails = [
+        _otp_mail(message_id=str(i), received_at=base - timedelta(seconds=i)) for i in range(5)
+    ]
     with patch(GRAPH_READ, return_value=mails):
         assert [m.message_id for m in reader.get_latest_messages(2)] == ["0", "1"]
 

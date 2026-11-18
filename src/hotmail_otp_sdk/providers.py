@@ -1,13 +1,15 @@
+import contextlib
 import http.client
 import imaplib
 import json
 import random
+import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
@@ -201,11 +203,41 @@ class GraphMailboxProvider(MailboxProvider):
         self._token_source = ""
 
 
-def _safe_logout(client: imaplib.IMAP4) -> None:
+_INTERNALDATE = re.compile(rb'INTERNALDATE "([^"]+)"')
+_MONTHS = {
+    name: index
+    for index, name in enumerate(
+        ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"),
+        start=1,
+    )
+}
+
+
+def _parse_internaldate(fetch_header: bytes) -> datetime | None:
+    """Parse INTERNALDATE ("18-Nov-2026 10:15:23 +0000") into an aware datetime.
+
+    Parsed manually because strptime's %b depends on the process locale.
+    """
+    match = _INTERNALDATE.search(fetch_header)
+    if not match:
+        return None
     try:
+        date_part, time_part, zone = match.group(1).decode("ascii").split()
+        day, month_name, year = date_part.strip().split("-")
+        hour, minute, second = (int(value) for value in time_part.split(":"))
+        sign = -1 if zone[0] == "-" else 1
+        offset = timedelta(hours=int(zone[1:3]), minutes=int(zone[3:5])) * sign
+        return datetime(
+            int(year), _MONTHS[month_name.title()], int(day),
+            hour, minute, second, tzinfo=timezone(offset),
+        )
+    except (KeyError, IndexError, UnicodeDecodeError, ValueError):
+        return None
+
+
+def _safe_logout(client: imaplib.IMAP4) -> None:
+    with contextlib.suppress(imaplib.IMAP4.error, OSError):
         client.logout()
-    except (imaplib.IMAP4.error, OSError):
-        pass
 
 
 def _message_body(message: EmailMessage) -> tuple[str, str | None]:
@@ -306,46 +338,57 @@ class ImapMailboxProvider(MailboxProvider):
         status, _ = client.select(mailbox, readonly=True)
         if status != "OK":
             raise MailboxProviderError(f"Could not select IMAP mailbox {mailbox}.")
-        status, data = client.search(None, "ALL")
+        # UIDs stay stable across sessions, unlike message sequence numbers.
+        status, data = client.uid("SEARCH", "ALL")
         if status != "OK" or not data or not data[0]:
             return []
-        ids = data[0].split()
-        selected = list(reversed(ids[-max(1, top):]))
+        uids = data[0].split()
+        selected = list(reversed(uids[-max(1, top):]))
 
         results: list[MailResult] = []
-        for message_id in selected:
+        for uid in selected:
             try:
-                status, parts = client.fetch(message_id, "(BODY.PEEK[])")
+                status, parts = client.uid("FETCH", uid, "(INTERNALDATE BODY.PEEK[])")
             except imaplib.IMAP4.error as exc:
                 raise MailboxProviderError("IMAP message fetch failed.") from exc
             if status != "OK" or not parts:
                 continue
-            raw = next(
-                (part[1] for part in parts if isinstance(part, tuple) and len(part) == 2),
+            fetched = next(
+                (part for part in parts if isinstance(part, tuple) and len(part) == 2),
                 None,
             )
-            if not raw:
+            if not fetched or not fetched[1]:
                 continue
-            result = self._to_mail_result(message_id, raw)
+            result = self._to_mail_result(uid, fetched[1], _parse_internaldate(fetched[0]))
             if result is not None:
                 results.append(result)
         return results
 
     @staticmethod
-    def _to_mail_result(message_id: bytes, raw: bytes) -> MailResult | None:
+    def _to_mail_result(
+        uid: bytes,
+        raw: bytes,
+        internal_date: datetime | None,
+    ) -> MailResult | None:
         message = BytesParser(policy=policy.default).parsebytes(raw)
-        received = message.get("Date")
-        if not received:
-            return None
         try:
-            received_at = parsedate_to_datetime(str(received))
-            body_text, body_html = _message_body(message)  # type: ignore[arg-type]
+            # Prefer the server-assigned INTERNALDATE: the Date header is set
+            # by the sender and can be skewed or forged, which would defeat the
+            # "since" filter.
+            if internal_date is not None:
+                received_at = internal_date
+            else:
+                received = message.get("Date")
+                if not received:
+                    return None
+                received_at = parsedate_to_datetime(str(received))
+            body_text, body_html = _message_body(message)
         except (LookupError, TypeError, ValueError):
             # Malformed Date header or undecodable body: the message cannot be
             # evaluated safely, so it is skipped rather than guessed at.
             return None
         return MailResult(
-            message_id=message_id.decode("ascii"),
+            message_id=uid.decode("ascii"),
             received_at=received_at,
             sender=str(message.get("From", "")),
             subject=str(message.get("Subject", "")),
