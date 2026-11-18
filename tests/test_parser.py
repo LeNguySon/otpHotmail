@@ -26,3 +26,12 @@ def test_parse_valid_account_masks_sensitive_values():
 def test_parse_rejects_invalid_account_formats(line):
     with pytest.raises(InvalidCredentialFormat):
         OtpReader.from_format(line)
+
+
+def test_parse_account_supports_extra_fields():
+    line = "user@example.com|secret|refresh-tok|client-id-123|recovery@example.com|cookie=abc"
+    reader = OtpReader.from_format(line)
+    assert reader.account.email == "user@example.com"
+    assert reader.account.password == "secret"
+    assert reader.account.refresh_token == "refresh-tok"
+    assert reader.account.client_id == "client-id-123"

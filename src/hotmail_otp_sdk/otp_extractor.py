@@ -5,20 +5,36 @@ from html.parser import HTMLParser
 
 from .models import MailResult, OtpQuery
 
-DEFAULT_OTP_PATTERN = re.compile(r"\b\d{4,8}\b")
+DEFAULT_OTP_PATTERN = re.compile(r"(?<![0-9a-zA-Z])\d{4,8}(?![0-9a-zA-Z])")
 AUTH_CONTEXT = re.compile(
-    r"\b(verification code|otp|passcode|one[- ]time password|security code|login code"
-    r"|mã xác nhận|mã xác minh|mã xác thực)\b",
+    r"\b(?:verification code|otp|passcode|one[- ]time password|security code|login code|confirmation code"
+    r"|access code|authentication code|auth code|mã xác nhận|mã xác minh|mã xác thực|mã otp|mã bảo mật"
+    r"|mã đăng nhập|mã kích hoạt|código de verificación|código de seguridad|código de confirmación"
+    r"|código de acceso|code de vérification|code de sécurité|code de confirmation|code d'accès"
+    r"|bestätigungscode|sicherheitscode|verifizierungscode|einmalpasswort|codice di verifica"
+    r"|codice di sicurezza|codice di conferma|código de verificação|kode verifikasi|kode keamanan"
+    r"|kode konfirmasi|код подтверждения|проверочный код|код безопасности|одноразовый пароль)\b"
+    r"|(?:验证码|驗證碼|校验码|校驗碼|确认码|確認碼|安全码|安全碼|动态码|動態碼|激活码|一次性密码|一次性密碼"
+    r"|認証コード|確認コード|セキュリティコード|ワンタイムパスワード|ログインコード"
+    r"|인증\s*코드|인증\s*번호|확인\s*코드|보안\s*코드|원타임\s*비밀번호"
+    r"|รหัสยืนยัน|รหัสความปลอดภัย|รหัสผ่านครั้งเดียว)",
     re.IGNORECASE,
 )
 # Bare "code" is common in OTP mails ("Your code is ...") but also appears in
 # "postal code" or "promo code", so it earns a smaller boost and is ignored
 # after such qualifiers. Spans already matched by AUTH_CONTEXT are not counted
 # twice.
-GENERIC_CONTEXT = re.compile(r"\b(code|mã)\b", re.IGNORECASE)
+GENERIC_CONTEXT = re.compile(
+    r"\b(?:code|mã|código|codice|kod|kode|код)\b"
+    r"|(?:[验驗]码|[確确]认码|安全码|代码|コード|코드|รหัส)",
+    re.IGNORECASE,
+)
 NON_OTP_CODE_QUALIFIER = re.compile(
-    r"\b(postal|zip|post|promo|promotion|discount|coupon|voucher|area|country"
-    r"|product|tracking|order|bưu chính|giảm giá|khuyến mãi|đơn hàng)\s*$",
+    r"\b(?:postal|zip|post|promo|promotion|discount|coupon|voucher|area|country"
+    r"|product|tracking|order|bưu chính|giảm giá|khuyến mãi|đơn hàng"
+    r"|descuento|promoción|réduction|rabatt|gutschein|почтов|скидк|заказ"
+    r"|pos|kupon|diskon|pesanan)\s*$"
+    r"|(?:邮政|优惠|折扣|订单|郵便|割引|注文)\s*$",
     re.IGNORECASE,
 )
 # Distances are gaps in characters between the keyword and the candidate.

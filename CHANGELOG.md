@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format follows
 ## [0.2.0] - Unreleased
 
 ### Added
+- Multi-language OTP context scoring and extraction supporting English,
+  Vietnamese, Chinese (Simplified & Traditional), Japanese, Korean, Russian,
+  Spanish, French, German, Portuguese, Italian, Indonesian, and Thai.
+- Extended credential line support: account parser accepts >= 4 pipe-separated
+  fields, extracting the primary 4 fields while ignoring trailing fields.
+- `run_live_test.py` interactive smoke test tool for authorized mailbox
+  verification.
 - `hotmail-otp` command-line tool with `wait` and `list` subcommands. The
   account is read from `HOTMAIL_OTP_ACCOUNT`, `--account-file` or stdin, never
   from arguments. Exit codes: 0 success, 1 error, 2 usage, 3 timeout,

@@ -121,3 +121,25 @@ def test_normalize_html_unescapes_entities_and_collapses_whitespace():
     assert normalize_html("<p>Code&nbsp;is\n\n <b>482910</b> &amp; valid</p>") == (
         "Code is 482910 & valid"
     )
+
+
+def test_extract_otp_multilanguage_support():
+    test_cases = [
+        ("您的验证码是 482910，请在5分钟内输入", "482910"),  # noqa: RUF001
+        ("您的驗證碼為482910，請勿洩露", "482910"),  # noqa: RUF001
+        ("お客様の認証コードは 482910 です", "482910"),
+        ("セキュリティコード:482910を入力してください", "482910"),
+        ("인증번호는 482910 입니다", "482910"),
+        ("Ваш проверочный код: 482910", "482910"),
+        ("Tu código de verificación es 482910", "482910"),
+        ("Votre code de sécurité est 482910", "482910"),
+        ("Ihr Sicherheitscode lautet 482910", "482910"),
+        ("Seu código de confirmação é 482910", "482910"),
+        ("Kode verifikasi Anda adalah 482910", "482910"),
+        ("รหัสยืนยันของคุณคือ 482910", "482910"),
+    ]
+    for text, expected_otp in test_cases:
+        message = _message(text, subject="Notification")
+        candidates = extract_otp_candidates(message)
+        assert candidates, f"Failed to extract OTP from text: {text}"
+        assert candidates[0] == expected_otp, f"Expected {expected_otp}, got {candidates[0]} for text: {text}"

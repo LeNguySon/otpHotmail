@@ -13,10 +13,10 @@ def parse_account(line: str) -> HotmailAccount:
         raise InvalidCredentialFormat("Account line must be a string.")
 
     fields = [field.strip() for field in line.split("|")]
-    if len(fields) != 4:
-        raise InvalidCredentialFormat("Expected exactly 4 pipe-separated fields.")
+    if len(fields) < 4:
+        raise InvalidCredentialFormat("Expected at least 4 pipe-separated fields.")
 
-    email, password, refresh_token, client_id = fields
+    email, password, refresh_token, client_id = fields[:4]
     if not email or not password or not refresh_token or not client_id:
         raise InvalidCredentialFormat("All four account fields are required.")
     if not EMAIL_RE.fullmatch(email):
