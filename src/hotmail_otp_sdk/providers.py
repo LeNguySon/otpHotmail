@@ -2,6 +2,7 @@ import contextlib
 import http.client
 import imaplib
 import json
+import logging
 import random
 import re
 import time
@@ -28,6 +29,8 @@ TokenSource = str | Callable[[], str]
 # Lower bound for a single network operation when a deadline is close, so a
 # final attempt still has a realistic chance to complete.
 _MIN_OPERATION_TIMEOUT = 1.0
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_token(source: TokenSource) -> str:
@@ -176,6 +179,10 @@ class GraphMailboxProvider(MailboxProvider):
             out_of_time = deadline is not None and time.monotonic() + delay >= deadline
             if attempt + 1 >= attempts or out_of_time:
                 raise error from cause
+            logger.warning(
+                "Microsoft Graph request failed (%s); retrying in %.1fs (attempt %d/%d).",
+                error, delay, attempt + 1, attempts,
+            )
             time.sleep(delay)
         raise MailboxProviderError("Microsoft Graph request failed.")
 
@@ -302,6 +309,7 @@ class ImapMailboxProvider(MailboxProvider):
         except (imaplib.IMAP4.error, OSError) as exc:
             _safe_logout(client)
             raise MailboxProviderError("IMAP XOAUTH2 authentication failed.") from exc
+        logger.debug("IMAP session authenticated.")
         self._client = client
         return client
 
@@ -331,6 +339,7 @@ class ImapMailboxProvider(MailboxProvider):
         except (imaplib.IMAP4.error, OSError) as exc:
             # The session may be broken (timeout, reset, server abort);
             # reconnect with a fresh token on the next read.
+            logger.warning("IMAP session failed (%s); it will be re-established.", type(exc).__name__)
             self._drop_connection()
             raise MailboxProviderError("IMAP mailbox query failed.") from exc
 

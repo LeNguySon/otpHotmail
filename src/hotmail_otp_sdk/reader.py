@@ -1,9 +1,11 @@
+import logging
 import re
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from ._redact import mask_email
 from .exceptions import (
     HotmailOtpError,
     MailboxProviderError,
@@ -14,6 +16,8 @@ from .otp_extractor import extract_otp_candidates_with_scores, filter_messages
 from .parser import parse_account
 from .providers import GraphMailboxProvider, ImapMailboxProvider, MailboxProvider
 from .token_manager import TokenManager
+
+logger = logging.getLogger(__name__)
 
 
 def _folders(folder_name: str) -> tuple[str, ...]:
@@ -160,6 +164,10 @@ class OtpReader:
                 and self.options.fallback_to_imap
                 and self.options.provider.upper() != "IMAP"
             ):
+                logger.warning(
+                    "Microsoft Graph failed for %s; falling back to IMAP.",
+                    mask_email(self.account.email),
+                )
                 self._provider.close()
                 self._provider = self._new_imap_provider()
                 self._provider_name = "IMAP"
@@ -178,6 +186,15 @@ class OtpReader:
         )
 
     def wait_for_otp(self, query: OtpQuery, options: OtpOptions | None = None) -> OtpResult:
+        result = self._wait_for_otp(query, options)
+        # Never log the OTP itself: it is a credential.
+        logger.info(
+            "wait_for_otp finished for %s: status=%s provider=%s error=%s",
+            mask_email(result.email), result.status, result.provider, result.error,
+        )
+        return result
+
+    def _wait_for_otp(self, query: OtpQuery, options: OtpOptions | None = None) -> OtpResult:
         opts = options or OtpOptions()
         if opts.timeout_ms < 0 or opts.poll_interval_ms < 0 or opts.max_messages_to_check < 1:
             return OtpResult(

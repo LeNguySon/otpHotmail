@@ -7,7 +7,7 @@ Hotmail, and Outlook accounts.
 
 ```powershell
 python -m pip install -e ".[test]"   # runtime + pytest
-python -m pip install -e ".[dev]"    # adds pytest-cov, ruff and mypy
+python -m pip install -e ".[dev]"    # adds pytest-cov, ruff, mypy, build and twine
 ```
 
 ## Usage
@@ -75,6 +75,70 @@ Use synthetic credentials in tests. Never write real passwords, refresh tokens,
 access tokens, OTP values, or mailbox content into source, logs, fixtures, or
 telemetry.
 
+## Command line
+
+Installing the package adds a `hotmail-otp` command (also `python -m hotmail_otp_sdk`).
+The account line is read from the `HOTMAIL_OTP_ACCOUNT` environment variable,
+from `--account-file PATH`, or from stdin with `--account-file -`. It is never
+accepted as an argument, because arguments leak into shell history and process
+listings.
+
+```powershell
+$env:HOTMAIL_OTP_ACCOUNT = Get-Content .\account.txt -Raw
+hotmail-otp wait --sender "@example.com" --subject verification --timeout 90
+hotmail-otp wait --json
+hotmail-otp list --top 5 --folder both
+```
+
+`wait` prints only the code on stdout (or a JSON result with `--json`). Exit
+codes: `0` success, `1` error, `2` usage/credential format, `3` timeout,
+`4` ambiguous. Use `-v`/`-vv` for redacted logs on stderr.
+
+## Logging
+
+The SDK logs through the `hotmail_otp_sdk` logger and is silent unless your
+application configures logging. Log messages mask email addresses
+(`u***@example.com`) and never contain passwords, refresh or access tokens,
+OTP codes, or message bodies. A test suite (`tests/test_security_audit.py`)
+checks this.
+
+```python
+import logging
+logging.getLogger("hotmail_otp_sdk").setLevel(logging.INFO)
+```
+
+## API reference
+
+| Name | Purpose |
+|---|---|
+| `OtpReader(account, options=None)` / `OtpReader.from_format(line, options=None)` | Main entry point; also a context manager |
+| `OtpReader.wait_for_otp(query, options=None) -> OtpResult` | Poll until an OTP is found, the result is ambiguous, or the timeout passes. Never raises for provider/token failures; returns `status="ERROR"` |
+| `OtpReader.get_latest_messages(top=10, folder="Inbox") -> list[MailResult]` | Read recent messages (`Inbox`, `Junk` or `both`). Raises `HotmailOtpError` subclasses |
+| `OtpReader.current_refresh_token` | Refresh token currently in use (may be rotated by Microsoft) |
+| `OtpReader.close()` | Drop cached tokens and connections |
+| `parse_account(line)`, `parse_accounts(lines)`, `load_accounts(path)` | Parse `email\|password\|refresh_token\|client_id` input |
+| `OtpQuery` | `since`, `sender_allowlist`, `subject_contains`, `otp_pattern`, `folder` |
+| `OtpOptions` | `timeout_ms`, `poll_interval_ms`, `max_messages_to_check`, `include_body_snippet` |
+| `OtpResult` | `status`, `email`, `code`, `message_id`, `received_at`, `sender`, `subject`, `body_snippet`, `provider`, `error`, `candidates` |
+| `MailResult` | `message_id`, `received_at`, `sender`, `subject`, `body_text`, `body_html` |
+
+Exceptions derive from `HotmailOtpError` and expose a stable `code`:
+`InvalidCredentialFormat`, `TokenRefreshFailed`, `AccountLockedOrDisabled`,
+`MailboxProviderError`, and `Throttled` (a `MailboxProviderError` with
+`retry_after`).
+
+More runnable code is in [`examples/`](examples/). Release notes are in
+[`CHANGELOG.md`](CHANGELOG.md).
+
+## Security notes
+
+- Use only mailboxes you own or are explicitly authorized to access.
+- The password field is parsed but never sent over the network.
+- The `client_id` must be consented for `Mail.Read` (Graph) and, for IMAP,
+  `IMAP.AccessAsUser.All`.
+- Treat OTP results, refresh tokens and account files as secrets. Store
+  account files with restrictive permissions.
+
 ## Configuration
 
 `ConfigOptions` supports:
@@ -129,3 +193,7 @@ before `close()` and store it securely if you persist credentials.
 
 Close the reader when finished so cached access and refresh tokens are dropped.
 `close()` does not modify a `HotmailAccount` you passed in.
+
+## License
+
+Released under the [MIT License](LICENSE).

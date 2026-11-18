@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 import time
 import urllib.error
@@ -7,6 +8,8 @@ import urllib.request
 
 from .exceptions import AccountLockedOrDisabled, TokenRefreshFailed
 from .models import ConfigOptions, HotmailAccount
+
+logger = logging.getLogger(__name__)
 
 
 class TokenManager:
@@ -35,6 +38,7 @@ class TokenManager:
             if cached and time.monotonic() < cached[1]:
                 return cached[0]
 
+            logger.debug("Requesting access token (scope=%s).", scope)
             body = urllib.parse.urlencode({
                 "client_id": self._account.client_id,
                 "grant_type": "refresh_token",
@@ -55,6 +59,7 @@ class TokenManager:
                 ) as response:
                     payload = json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:
+                logger.warning("Token endpoint returned HTTP %s.", exc.code)
                 if exc.code in (400, 401):
                     raise TokenRefreshFailed(
                         "Microsoft rejected the refresh token or client id."
@@ -81,6 +86,8 @@ class TokenManager:
 
             self._tokens[scope] = (access_token, time.monotonic() + lifetime)
             if payload.get("refresh_token"):
+                if payload["refresh_token"] != self._refresh_token:
+                    logger.info("Microsoft rotated the refresh token; read current_refresh_token to persist it.")
                 self._refresh_token = payload["refresh_token"]
             return access_token
 
