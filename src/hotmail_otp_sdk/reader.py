@@ -1,7 +1,8 @@
 import re
 import time
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Iterable
 
 from .exceptions import (
     HotmailOtpError,
@@ -24,6 +25,55 @@ def _folders(query: OtpQuery) -> tuple[str, ...]:
     return ("Inbox",)
 
 
+@dataclass(frozen=True)
+class _RankedCandidate:
+    code: str
+    score: int
+    timestamp: float
+    message: MailResult
+
+
+def _timestamp(value: datetime) -> float:
+    # IMAP may yield naive datetimes (e.g. "-0000" Date headers); treat them as
+    # UTC so they can be compared with timezone-aware Graph timestamps.
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()
+
+
+def _rank_candidates(
+    messages: Iterable[MailResult],
+    pattern: str | None,
+) -> list[_RankedCandidate]:
+    """Return one entry per distinct code: best score, then newest message."""
+    best: dict[str, _RankedCandidate] = {}
+    for message in messages:
+        timestamp = _timestamp(message.received_at)
+        for code, score in extract_otp_candidates_with_scores(message, pattern):
+            current = best.get(code)
+            if current is None or (score, timestamp) > (current.score, current.timestamp):
+                best[code] = _RankedCandidate(code, score, timestamp, message)
+    return sorted(best.values(), key=lambda item: (-item.score, -item.timestamp, item.code))
+
+
+def _pick_winner(ranked: list[_RankedCandidate]) -> _RankedCandidate | None:
+    if not ranked:
+        return None
+    top = ranked[0]
+    if len(ranked) == 1:
+        return top
+    second = ranked[1]
+    if top.score > second.score:
+        return top
+    # Equal scores: when both codes sit next to verification wording (score > 1)
+    # and come from different points in time, the newest message wins. This is
+    # the usual "resend code" case, where the older code is already stale.
+    # Ties within one message, or between low-context numbers, stay ambiguous.
+    if top.score > 1 and top.timestamp > second.timestamp:
+        return top
+    return None
+
+
 class OtpReader:
     def __init__(self, account: HotmailAccount, options: ConfigOptions | None = None):
         self.account = account
@@ -37,17 +87,23 @@ class OtpReader:
     def from_format(account_line: str, options: ConfigOptions | None = None) -> "OtpReader":
         return OtpReader(parse_account(account_line), options)
 
+    def _graph_token(self) -> str:
+        return self.token_manager.get_access_token(self.options.oauth_scope)
+
+    def _imap_token(self) -> str:
+        return self.token_manager.get_access_token(self.options.imap_oauth_scope)
+
+    def _new_imap_provider(self) -> ImapMailboxProvider:
+        return ImapMailboxProvider(self.account.email, self._imap_token, self.options)
+
     def _create_provider(self) -> MailboxProvider:
-        access_token = self.token_manager.get_access_token()
+        # Providers receive token callables (not a token snapshot) so cached
+        # tokens are refreshed by TokenManager once they expire.
         if self.options.provider.upper() == "IMAP":
             self._provider_name = "IMAP"
-            return ImapMailboxProvider(
-                self.account.email,
-                access_token,
-                self.options,
-            )
+            return self._new_imap_provider()
         self._provider_name = "GRAPH"
-        return GraphMailboxProvider(access_token, self.options)
+        return GraphMailboxProvider(self._graph_token, self.options)
 
     def _read_messages(self, top: int, folders: Iterable[str]) -> tuple[list[MailResult], str]:
         if self._closed:
@@ -68,12 +124,7 @@ class OtpReader:
                 and self.options.provider.upper() != "IMAP"
             ):
                 self._provider.close()
-                access_token = self.token_manager.get_access_token()
-                self._provider = ImapMailboxProvider(
-                    self.account.email,
-                    access_token,
-                    self.options,
-                )
+                self._provider = self._new_imap_provider()
                 self._provider_name = "IMAP"
                 results = []
                 for folder in folders:
@@ -119,26 +170,15 @@ class OtpReader:
                     _folders(effective_query),
                 )
                 messages = filter_messages(raw_messages, effective_query)
-                ranked: list[tuple[str, int, MailResult]] = []
-                for message in messages:
-                    for candidate, score in extract_otp_candidates_with_scores(
-                        message,
-                        effective_query.otp_pattern,
-                    ):
-                        ranked.append((candidate, score, message))
-
-                unique = tuple(dict.fromkeys(candidate for candidate, _, _ in ranked))
-                if len(unique) == 1:
-                    candidate, message = next(
-                        (candidate, mail)
-                        for candidate, _, mail in ranked
-                        if candidate == unique[0]
-                    )
+                ranked = _rank_candidates(messages, effective_query.otp_pattern)
+                winner = _pick_winner(ranked)
+                if winner is not None:
+                    message = winner.message
                     snippet = message.body_text[:240] if opts.include_body_snippet else None
                     return OtpResult(
                         status="SUCCESS",
                         email=self.account.email,
-                        code=candidate,
+                        code=winner.code,
                         message_id=message.message_id,
                         received_at=message.received_at,
                         sender=message.sender,
@@ -146,42 +186,11 @@ class OtpReader:
                         body_snippet=snippet,
                         provider=provider_name,
                     )
-                if len(unique) > 1:
-                    best_candidates = {}
-                    for candidate, score, _ in ranked:
-                        best_candidates[candidate] = max(
-                            best_candidates.get(candidate, 0),
-                            score,
-                        )
-                    sorted_candidates = sorted(
-                        best_candidates.items(),
-                        key=lambda item: (-item[1], item[0]),
-                    )
-                    if len(sorted_candidates) > 1:
-                        top_candidate, top_score = sorted_candidates[0]
-                        _, second_score = sorted_candidates[1]
-                        if top_score > second_score:
-                            message = next(
-                                mail
-                                for candidate, _, mail in ranked
-                                if candidate == top_candidate
-                            )
-                            snippet = message.body_text[:240] if opts.include_body_snippet else None
-                            return OtpResult(
-                                status="SUCCESS",
-                                email=self.account.email,
-                                code=top_candidate,
-                                message_id=message.message_id,
-                                received_at=message.received_at,
-                                sender=message.sender,
-                                subject=message.subject,
-                                body_snippet=snippet,
-                                provider=provider_name,
-                            )
+                if ranked:
                     return OtpResult(
                         status="AMBIGUOUS",
                         email=self.account.email,
-                        candidates=unique,
+                        candidates=tuple(item.code for item in ranked),
                         provider=provider_name,
                         error="AmbiguousOtp",
                     )

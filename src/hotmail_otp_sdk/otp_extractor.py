@@ -13,13 +13,27 @@ AUTH_CONTEXT = re.compile(
 )
 
 
+# Content of these elements is never shown to the reader; it holds CSS/JS such
+# as "color:#000000" whose digit runs would otherwise look like OTP codes.
+_HIDDEN_TAGS = frozenset({"script", "style", "template"})
+
+
 class _TextExtractor(HTMLParser):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.parts: list[str] = []
+        self._hidden_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in _HIDDEN_TAGS:
+            self._hidden_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _HIDDEN_TAGS and self._hidden_depth:
+            self._hidden_depth -= 1
 
     def handle_data(self, data: str) -> None:
-        if data.strip():
+        if not self._hidden_depth and data.strip():
             self.parts.append(data)
 
 

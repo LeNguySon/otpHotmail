@@ -60,3 +60,14 @@ def test_filter_uses_since_sender_and_subject():
         subject_contains="verification",
     )
     assert filter_messages([old, wrong_sender, valid], query) == [valid]
+
+
+def test_normalize_html_ignores_style_and_script_content():
+    html = (
+        "<html><head><style>.a{color:#000000}</style>"
+        "<script>var n = 135790;</script></head>"
+        '<body><p style="color:#333333">Your verification code is 482910</p></body></html>'
+    )
+    text = normalize_html(html)
+    assert text == "Your verification code is 482910"
+    assert extract_otp_candidates(_message(text, subject="Hello")) == ("482910",)

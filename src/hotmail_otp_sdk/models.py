@@ -41,6 +41,9 @@ class ConfigOptions:
     provider: str = "GRAPH"
     fallback_to_imap: bool = True
     oauth_scope: str = "https://graph.microsoft.com/Mail.Read offline_access"
+    # IMAP XOAUTH2 needs a token issued for the Outlook resource; a Graph-scoped
+    # token is rejected by the IMAP server.
+    imap_oauth_scope: str = "https://outlook.office.com/IMAP.AccessAsUser.All offline_access"
     http_timeout_seconds: float = 20.0
     max_retries: int = 3
     retry_backoff_seconds: float = 1.0

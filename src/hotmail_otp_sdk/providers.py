@@ -1,4 +1,3 @@
-import base64
 import imaplib
 import json
 import random
@@ -6,13 +5,22 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from email import policy
 from email.parser import BytesParser
-from typing import Iterable
 
 from .exceptions import MailboxProviderError, Throttled
 from .models import ConfigOptions, MailResult
 from .otp_extractor import normalize_html
+
+# A provider accepts either a fixed access token or a callable that returns a
+# current one. The callable form lets long-lived readers pick up refreshed
+# tokens instead of reusing an expired one.
+TokenSource = str | Callable[[], str]
+
+
+def _resolve_token(source: TokenSource) -> str:
+    return source() if callable(source) else source
 
 
 class MailboxProvider:
@@ -29,8 +37,8 @@ def _parse_datetime(value: str):
 
 
 class GraphMailboxProvider(MailboxProvider):
-    def __init__(self, access_token: str, options: ConfigOptions):
-        self._access_token = access_token
+    def __init__(self, access_token: TokenSource, options: ConfigOptions):
+        self._token_source: TokenSource = access_token
         self._options = options
         self._closed = False
 
@@ -39,10 +47,20 @@ class GraphMailboxProvider(MailboxProvider):
             raise MailboxProviderError("Mailbox provider is closed.")
 
         folder_name = "junkemail" if folder.lower() in ("junk", "spam", "junkemail") else "inbox"
-        url = (
+        # Percent-encode the OData query: http.client rejects URLs that contain
+        # raw spaces (e.g. "receivedDateTime desc").
+        query = urllib.parse.urlencode(
+            {
+                "$select": "id,receivedDateTime,from,subject,bodyPreview,body",
+                "$orderby": "receivedDateTime desc",
+                "$top": max(1, min(top, 50)),
+            },
+            quote_via=urllib.parse.quote,
+            safe="$,",
+        )
+        url: str | None = (
             f"{self._options.graph_base_url.rstrip('/')}/me/mailFolders/{folder_name}/messages"
-            f"?$select=id,receivedDateTime,from,subject,bodyPreview,body"
-            f"&$orderby=receivedDateTime desc&$top={max(1, min(top, 50))}"
+            f"?{query}"
         )
         results: list[MailResult] = []
         while url:
@@ -73,7 +91,7 @@ class GraphMailboxProvider(MailboxProvider):
             request = urllib.request.Request(
                 url,
                 headers={
-                    "Authorization": f"Bearer {self._access_token}",
+                    "Authorization": f"Bearer {_resolve_token(self._token_source)}",
                     "Accept": "application/json",
                 },
                 method="GET",
@@ -125,13 +143,13 @@ class GraphMailboxProvider(MailboxProvider):
 
     def close(self) -> None:
         self._closed = True
-        self._access_token = ""
+        self._token_source = ""
 
 
 class ImapMailboxProvider(MailboxProvider):
-    def __init__(self, email: str, access_token: str, options: ConfigOptions):
+    def __init__(self, email: str, access_token: TokenSource, options: ConfigOptions):
         self._email = email
-        self._access_token = access_token
+        self._token_source: TokenSource = access_token
         self._options = options
         self._client: imaplib.IMAP4_SSL | None = None
         self._closed = False
@@ -144,11 +162,15 @@ class ImapMailboxProvider(MailboxProvider):
             self._options.imap_port,
             timeout=self._options.http_timeout_seconds,
         )
-        auth_string = f"user={self._email}\x01auth=Bearer {self._access_token}\x01\x01"
+        access_token = _resolve_token(self._token_source)
+        auth_string = f"user={self._email}\x01auth=Bearer {access_token}\x01\x01"
         try:
+            # imaplib base64-encodes the callback's return value itself, so the
+            # raw SASL string must be returned here (encoding it again breaks
+            # XOAUTH2).
             status, _ = client.authenticate(
                 "XOAUTH2",
-                lambda _: base64.b64encode(auth_string.encode("utf-8")),
+                lambda _: auth_string.encode("utf-8"),
             )
             if status != "OK":
                 raise MailboxProviderError("IMAP XOAUTH2 authentication failed.")
@@ -238,4 +260,4 @@ class ImapMailboxProvider(MailboxProvider):
             except imaplib.IMAP4.error:
                 pass
             self._client = None
-        self._access_token = ""
+        self._token_source = ""

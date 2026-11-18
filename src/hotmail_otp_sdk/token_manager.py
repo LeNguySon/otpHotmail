@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 import urllib.error
@@ -12,21 +13,24 @@ class TokenManager:
     def __init__(self, account: HotmailAccount, options: ConfigOptions):
         self._account = account
         self._options = options
-        self._access_token: str | None = None
-        self._expires_at = 0.0
+        # Access tokens are resource-specific (Graph vs. Outlook IMAP), so they
+        # are cached per scope: scope -> (access_token, monotonic expiry).
+        self._tokens: dict[str, tuple[str, float]] = {}
         self._refresh_token = account.refresh_token
         self._lock = threading.Lock()
 
-    def get_access_token(self) -> str:
+    def get_access_token(self, scope: str | None = None) -> str:
+        scope = scope or self._options.oauth_scope
         with self._lock:
-            if self._access_token and time.monotonic() < self._expires_at:
-                return self._access_token
+            cached = self._tokens.get(scope)
+            if cached and time.monotonic() < cached[1]:
+                return cached[0]
 
             body = urllib.parse.urlencode({
                 "client_id": self._account.client_id,
                 "grant_type": "refresh_token",
                 "refresh_token": self._refresh_token,
-                "scope": self._options.oauth_scope,
+                "scope": scope,
             }).encode("utf-8")
             request = urllib.request.Request(
                 self._options.token_endpoint,
@@ -40,7 +44,6 @@ class TokenManager:
                     request,
                     timeout=self._options.http_timeout_seconds,
                 ) as response:
-                    import json
                     payload = json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:
                 if exc.code in (400, 401):
@@ -67,14 +70,12 @@ class TokenManager:
             except (TypeError, ValueError):
                 lifetime = 3_540
 
-            self._access_token = access_token
-            self._expires_at = time.monotonic() + lifetime
+            self._tokens[scope] = (access_token, time.monotonic() + lifetime)
             if payload.get("refresh_token"):
                 self._refresh_token = payload["refresh_token"]
             return access_token
 
     def close(self) -> None:
         with self._lock:
-            self._access_token = None
-            self._expires_at = 0.0
+            self._tokens.clear()
             self._refresh_token = ""

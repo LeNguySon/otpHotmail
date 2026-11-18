@@ -69,7 +69,10 @@ telemetry.
 - `imap_host` and `imap_port`: IMAP XOAUTH2 fallback server
 - `provider`: `GRAPH` or `IMAP`
 - `fallback_to_imap`: allow Graph failures to fall back to IMAP
-- `oauth_scope`: OAuth scope used during refresh
+- `oauth_scope`: OAuth scope requested for Microsoft Graph tokens
+- `imap_oauth_scope`: OAuth scope requested for IMAP XOAUTH2 tokens
+  (default `https://outlook.office.com/IMAP.AccessAsUser.All offline_access`);
+  the `client_id` must be consented for this scope for IMAP to work
 - `http_timeout_seconds`: network timeout
 - `max_retries`: maximum Graph attempts for transient failures
 - `retry_backoff_seconds`: base delay for exponential retry backoff
